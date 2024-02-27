@@ -11,13 +11,18 @@ use serde_json::json;
 const BASE_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/payment/create-time";
 const INSTANCE_ID_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/instance-id";
 const INSTANCE_NAME_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/instance-name";
-const TOKEN: &str = "ogUSAsQicRW1pOVfuq-rO";
+const DEFAULT_TOKEN: &str = "ogUSAsQicRW1pOVfuq-rO";
 const SCRIPT_NAME: &str = "interrupt_callback.sh";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     let webhook_url = &args[1]; // webhook url
     println!("webhook url: {}", webhook_url);
+
+    let token = match args.len() {
+        3 => args[2].clone(),
+        _ => DEFAULT_TOKEN.to_owned(),
+    };
 
     loop {
         // request metadata
@@ -41,16 +46,16 @@ fn main() {
             let client = reqwest::blocking::Client::new();
             let resp = client.post(webhook_url)
                 .body(body.to_string())
-                .header("Authorization", TOKEN)
+                .header("Authorization", DEFAULT_TOKEN)
                 .send().unwrap();
             println!("request body: {:?}", body.to_string());
             println!("response body: {:?}", resp.text().unwrap());
 
-            // 获取当前工作目录的路径
-            let current_dir = env::current_dir().expect("Failed to get current directory").join(SCRIPT_NAME);
-            let output = execute_shell_script_from_file(current_dir.to_str().unwrap());
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            println!("\n ---------- stdout ---------- \n {:?}", stdout);
+            // 运行 shell 脚本
+            // let current_dir = env::current_dir().expect("Failed to get current directory").join(SCRIPT_NAME);
+            // let output = execute_shell_script_from_file(current_dir.to_str().unwrap());
+            // let stdout = String::from_utf8_lossy(&output.stdout);
+            // println!("\n ---------- stdout ---------- \n {:?}", stdout);
 
             break;
         }
