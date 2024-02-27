@@ -46,7 +46,7 @@ fn main() {
             let client = reqwest::blocking::Client::new();
             let resp = client.post(webhook_url)
                 .body(body.to_string())
-                .header("Authorization", DEFAULT_TOKEN)
+                .header("Authorization", token)
                 .send().unwrap();
             println!("request body: {:?}", body.to_string());
             println!("response body: {:?}", resp.text().unwrap());
