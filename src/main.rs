@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 // const BASE_URL: &str = "https://course.rs/basic/result-error/panic.html";
-// const BASE_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/spot/termination-time";
-const BASE_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/payment/create-time";
+const BASE_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/spot/termination-time";
+// const BASE_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/payment/create-time";
 const INSTANCE_ID_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/instance-id";
 const INSTANCE_NAME_URL: &str = "http://metadata.tencentyun.com/latest/meta-data/instance-name";
 const DEFAULT_TOKEN: &str = "ogUSAsQicRW1pOVfuq-rO";
