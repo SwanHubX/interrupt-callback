@@ -8,15 +8,15 @@ pub struct Config {
     pub name: String,
     #[serde(default)]
     pub provider: Provider,
-    #[serde(default)]
-    pub alert: Alert,
     #[serde(default = "default_interval")]
     pub interval: u16, // unit: second
+    #[serde(default)]
+    pub alert: Alert,
     #[serde(default)]
     pub keepalive: KeepAlive,
 }
 
-// check every 10 seconds
+// checking instance status at regular intervals. every 10 seconds.
 fn default_interval() -> u16 {
     10
 }
