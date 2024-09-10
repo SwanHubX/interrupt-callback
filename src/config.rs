@@ -104,7 +104,7 @@ fn default_num() -> u16 {
 
 // load config file in toml format.
 // If the file path doesn't exist, it will return default configuration.
-pub fn load_config(path: &Path) -> Result<Config, toml::de::Error> {
+pub fn load_config(path: &Path) -> Result<Config, Box<dyn Error>> {
     let content = fs::read_to_string(path).unwrap_or_else(|err| {
         warn!("{}: use default",err.to_string());
         String::from("")
