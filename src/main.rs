@@ -1,5 +1,6 @@
 mod config;
 mod alert;
+mod spot;
 
 use log::{LevelFilter};
 use env_logger::Builder;
