@@ -3,7 +3,7 @@ mod feishu;
 use chrono::{FixedOffset, Local};
 use log::{error, info};
 use std::collections::HashMap;
-use std::{fmt, io};
+use std::{fmt, error::Error};
 use sysinfo::System;
 
 // all the events must transfer Msg instance
@@ -80,7 +80,7 @@ impl fmt::Display for Target {
 
 
 pub trait Notice {
-    fn send(&self, msg: &Msg) -> Result<(), io::Error>;
+    fn send(&self, msg: &Msg) -> Result<(), Box<dyn Error>>;
 }
 
 type AlertMap = HashMap<String, Box<dyn Notice>>;
@@ -107,6 +107,7 @@ impl Alert {
                 error!("fail to send to {name}: {}", err.to_string());
                 is_ok = false;
             });
+            info!("successfully sent to {name}");
             result.insert(name.to_string(), is_ok);
         }
         result
@@ -119,7 +120,7 @@ mod test {
     use super::*;
     use chrono::NaiveDateTime;
     use std::collections::HashMap;
-    use std::io::{Error, ErrorKind};
+    use std::error::Error;
 
     #[test]
     fn test_now() {
@@ -152,14 +153,14 @@ mod test {
     struct Failure {}
 
     impl Notice for Success {
-        fn send(&self, _msg: &Msg) -> Result<(), Error> {
+        fn send(&self, _msg: &Msg) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
 
     impl Notice for Failure {
-        fn send(&self, _msg: &Msg) -> Result<(), Error> {
-            Err(Error::new(ErrorKind::TimedOut, "test"))
+        fn send(&self, _msg: &Msg) -> Result<(), Box<dyn Error>> {
+            Err(Box::from("timeout"))
         }
     }
 

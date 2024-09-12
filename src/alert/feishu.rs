@@ -1,29 +1,56 @@
-use std::io::Error;
+use std::error::Error;
 use super::{Msg, Notice};
 use crate::config::Feishu;
 use chrono::Utc;
 use sha2::Sha256;
 use hmac::{Hmac, Mac, digest};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use log::{debug, error};
 use serde_json::json;
-
+use reqwest::StatusCode;
 
 impl Notice for Feishu {
-    fn send(&self, msg: &Msg) -> Result<(), Error> {
+    fn send(&self, msg: &Msg) -> Result<(), Box<dyn Error>> {
         let timestamp = Utc::now().timestamp();
-        let sign = self.sign(timestamp).unwrap();
+        let sign = self.sign(timestamp)?;
         let data = json!({
             "timestamp": timestamp,
             "sign": sign,
-            "msg_type": "text",
+            "msg_type": "post",
             "content": {
-                "text": "request example"
+                "post": {
+                    "zh_cn": {
+                        "title": msg.code.to_string(),
+                        "content": [
+                            [{
+                                "tag": "text",
+                                "text": format!("目标实例：{}", msg.target),
+                            }],
+                            [{
+                                "tag": "text",
+                                "text": format!("主机名称：{}", msg.hostname),
+                            }],
+                            [{
+                                "tag": "text",
+                                "text": format!("--------\n报警时间：{}", msg.datetime),
+                            }]
+                        ]
+                    }
+                }
             }
         });
+        debug!("[feishu] request body: {}", data);
         let client = reqwest::blocking::Client::new();
-        let res = client.post(self.webhook.to_string()).json(&data).send();
-        println!("{:?}", res);
-        todo!()
+        let res = client.post(self.webhook.to_string()).json(&data).send()?;
+
+        match res.status() {
+            StatusCode::OK => Ok(()),
+            _ => {
+                let text = res.text()?;
+                error!("[feishu] sorry, an error happened: {}", text);
+                Err(Box::from(text.to_string()))
+            }
+        }
     }
 }
 
@@ -36,7 +63,7 @@ impl Feishu {
     // reference: https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot#3c6592d6
     fn sign(&self, timestamp: i64) -> Result<String, digest::InvalidLength> {
         let str_to_sign = format!("{}\n{}", timestamp.to_string(), self.secret);
-        let mut mac = HmacSha256::new_from_slice(str_to_sign.as_ref())?;
+        let mac = HmacSha256::new_from_slice(str_to_sign.as_ref())?;
         Ok(STANDARD.encode(mac.finalize().into_bytes()))
     }
 }
