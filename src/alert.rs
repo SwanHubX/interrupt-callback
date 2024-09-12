@@ -3,7 +3,7 @@ mod feishu;
 use chrono::{FixedOffset, Local};
 use log::{error, info};
 use std::collections::HashMap;
-use std::{fmt, io};
+use std::{fmt, error::Error};
 use sysinfo::System;
 
 // all the events must transfer Msg instance
@@ -69,9 +69,18 @@ pub enum Target {
     Another(String),
 }
 
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Target::Myself(n) => write!(f, "myself({n})"),
+            Target::Another(n) => write!(f, "another({n})"),
+        }
+    }
+}
+
 
 pub trait Notice {
-    fn send(&self, msg: &Msg) -> Result<(), io::Error>;
+    fn send(&self, msg: &Msg) -> Result<(), Box<dyn Error>>;
 }
 
 type AlertMap = HashMap<String, Box<dyn Notice>>;
@@ -98,6 +107,7 @@ impl Alert {
                 error!("fail to send to {name}: {}", err.to_string());
                 is_ok = false;
             });
+            info!("successfully sent to {name}");
             result.insert(name.to_string(), is_ok);
         }
         result
@@ -110,7 +120,7 @@ mod test {
     use super::*;
     use chrono::NaiveDateTime;
     use std::collections::HashMap;
-    use std::io::{Error, ErrorKind};
+    use std::error::Error;
 
     #[test]
     fn test_now() {
@@ -127,7 +137,15 @@ mod test {
     #[test]
     fn test_code() {
         assert_eq!("阿里云服务器释放通知", Code::AliCloudInterrupt.to_string());
+        assert_eq!("腾讯云服务器释放通知", Code::TencentCloudInterrupt.to_string());
+        assert_eq!("服务器离线通知", Code::Offline.to_string());
         assert_eq!("服务器上线通知", Code::Online.to_string());
+    }
+
+    #[test]
+    fn test_target() {
+        assert_eq!("myself(J)", Target::Myself(String::from("J")).to_string());
+        assert_eq!("another(K)", Target::Another(String::from("K")).to_string());
     }
 
     // mock notices object for testing
@@ -135,14 +153,14 @@ mod test {
     struct Failure {}
 
     impl Notice for Success {
-        fn send(&self, _msg: &Msg) -> Result<(), Error> {
+        fn send(&self, _msg: &Msg) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
 
     impl Notice for Failure {
-        fn send(&self, _msg: &Msg) -> Result<(), Error> {
-            Err(Error::new(ErrorKind::TimedOut, "test"))
+        fn send(&self, _msg: &Msg) -> Result<(), Box<dyn Error>> {
+            Err(Box::from("timeout"))
         }
     }
 
