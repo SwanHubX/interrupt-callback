@@ -10,6 +10,15 @@ use serde_json::json;
 use reqwest::StatusCode;
 
 impl Notice for Feishu {
+    /*
+    reference: https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot#f62e72d5
+    example:
+    阿里云服务器释放通知
+    目标实例：myself(Hi)
+    主机名称：JQS-MacbookPro.local
+    --------
+    报警时间：2024-09-12 15:51:54
+     */
     fn send(&self, msg: &Msg) -> Result<(), Box<dyn Error>> {
         let timestamp = Utc::now().timestamp();
         let sign = self.sign(timestamp)?;
@@ -70,23 +79,52 @@ impl Feishu {
 
 #[cfg(test)]
 mod test {
-    use crate::alert::{Code, Target};
     use super::*;
-
-    #[test]
-    fn test_send() {
-        let fe = Feishu {
-            webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/96b876bf-5125-4537-aac0-9ff12dccade7".to_string(),
-            secret: "zjVpK38hLf3YrvdnKbq0Qc".to_string(),
-        };
-        fe.send(&Msg::new(Code::AliCloudInterrupt, Target::Myself("He".to_string()))).expect("TODO: panic message");
-        println!("11")
-    }
+    use crate::alert::{Code, Target};
 
     #[test]
     fn test_sign() {
         let fe = Feishu { webhook: "".to_string(), secret: "Oh, you saw me.".to_string() };
         let sign = fe.sign(1726063290).unwrap();
         assert_eq!(sign, "EG8eZFIOxDlxx0DqlxsEz8YgjXexLF4nmD4seu2WG14=")
+    }
+
+    #[test]
+    fn test_send_ok() {
+        let mut server = mockito::Server::new();
+        let mock = server.mock("POST", "/feishu")
+            .match_header("content-type", "application/json")
+            .with_body("ok")
+            .create();
+
+        let fe = Feishu {
+            webhook: format!("{}/feishu", server.url()),
+            secret: "plaintext".to_string(),
+        };
+        let msg = Msg::new(Code::AliCloudInterrupt, Target::Myself("superman".to_string()));
+        fe.send(&msg).unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    #[should_panic(expected = "request error")]
+    fn test_send_err() {
+        let mut server = mockito::Server::new();
+        let mock = server.mock("POST", "/feishu")
+            .with_status(400)
+            .with_body(json!({
+                "code": "Mock_Error",
+                "status": 400,
+                "msg": "hhh"
+            }).to_string())
+            .create();
+
+        let fe = Feishu {
+            webhook: format!("{}/feishu", server.url()),
+            secret: "no".to_string(),
+        };
+        let msg = Msg::new(Code::TencentCloudInterrupt, Target::Another("local".to_string()));
+        fe.send(&msg).expect("request error");
+        mock.assert();
     }
 }
