@@ -1,6 +1,6 @@
-use std::time::Duration;
 use log::error;
-use reqwest::{Error, StatusCode, blocking::Client};
+use reqwest::{blocking::Client, Error, StatusCode};
+use std::time::Duration;
 
 struct Spot {
     client: Client,
@@ -9,7 +9,29 @@ struct Spot {
 impl Spot {
     pub fn new() -> Spot {
         Spot {
-            client: Client::new()
+            client: Client::new(),
+        }
+    }
+
+    // there are the following results
+    // 0: it means that the instance will be released in a few minutes.
+    // 1: normal
+    // 2. unknown error
+    fn query(&self, url: String) -> Result<i8, Error> {
+        // limit 1s
+        let res = self
+            .client
+            .get(url)
+            .timeout(Duration::from_secs(1))
+            .send()?;
+
+        match res.status() {
+            StatusCode::OK => Ok(0),
+            StatusCode::NOT_FOUND => Ok(1),
+            _ => {
+                error!("[spot instance] unknown error: {}", res.text()?);
+                Ok(2)
+            }
         }
     }
 
@@ -20,26 +42,20 @@ impl Spot {
     // 1: normal
     // 2. unknown error
     // reference: https://help.aliyun.com/zh/ecs/use-cases/query-the-interruption-events-of-preemptible-instances
-    pub fn query_ecs(&self, uri: Option<String>) -> Result<i8, Error> {
-        let url = uri.unwrap_or_else(|| {
-            "http://100.100.100.200/latest/meta-data/instance/spot/termination-time".to_string()
-        });
-        // limit 1s
-        let res = self.client.get(url)
-            .timeout(Duration::from_secs(1))
-            .send()?;
-
-        match res.status() {
-            StatusCode::OK => Ok(0),
-            StatusCode::NOT_FOUND => Ok(1),
-            _ => {
-                error!("[ecs] unknown error: {}", res.text()?);
-                Ok(2)
-            }
-        }
+    pub fn query_ecs(&self) -> Result<i8, Error> {
+        self.query(
+            "http://100.100.100.200/latest/meta-data/instance/spot/termination-time".to_string(),
+        )
     }
 
-    pub fn query_cvm() {}
+    // the spot instance of tencentcloud (alias cvm)
+    // fixed url: GET http://metadata.tencentyun.com/latest/meta-data/spot/termination-time
+    // reference: https://cloud.tencent.com/document/product/213/37970
+    pub fn query_cvm(&self) -> Result<i8, Error> {
+        self.query(
+            "http://metadata.tencentyun.com/latest/meta-data/spot/termination-time".to_string(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -48,37 +64,37 @@ mod test {
 
     // network error
     #[test]
-    fn test_query_ecs_err() {
+    fn test_query_err() {
         let spot = Spot::new();
-        let err = spot.query_ecs(None).expect_err("timeout");
+        let err = spot
+            .query("http://100.100.100.200".to_string())
+            .expect_err("timeout");
         assert!(err.is_timeout());
     }
 
-    fn test_query_ecs(status: usize, code: i8) {
+    fn test_query(status: usize, code: i8) {
         let mut server = mockito::Server::new();
 
-        let mock = server.mock("GET", "/spot")
-            .with_status(status)
-            .create();
+        let mock = server.mock("GET", "/spot").with_status(status).create();
         let spot = Spot::new();
-        let c = spot.query_ecs(Some(format!("{}/spot", server.url()))).unwrap();
+        let c = spot.query(format!("{}/spot", server.url())).unwrap();
         assert_eq!(c, code);
         mock.assert();
     }
 
     // (true) will be released
     #[test]
-    fn test_query_ecs_0() {
-        test_query_ecs(200, 0);
+    fn test_query_0() {
+        test_query(200, 0);
     }
 
     #[test]
-    fn test_query_ecs_1() {
-        test_query_ecs(404, 1);
+    fn test_query_1() {
+        test_query(404, 1);
     }
 
     #[test]
-    fn test_query_ecs_2() {
-        test_query_ecs(500, 2);
+    fn test_query_2() {
+        test_query(500, 2);
     }
 }
