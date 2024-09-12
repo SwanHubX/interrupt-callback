@@ -69,6 +69,15 @@ pub enum Target {
     Another(String),
 }
 
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Target::Myself(n) => write!(f, "myself({n})"),
+            Target::Another(n) => write!(f, "another({n})"),
+        }
+    }
+}
+
 
 pub trait Notice {
     fn send(&self, msg: &Msg) -> Result<(), io::Error>;
@@ -127,7 +136,15 @@ mod test {
     #[test]
     fn test_code() {
         assert_eq!("阿里云服务器释放通知", Code::AliCloudInterrupt.to_string());
+        assert_eq!("腾讯云服务器释放通知", Code::TencentCloudInterrupt.to_string());
+        assert_eq!("服务器离线通知", Code::Offline.to_string());
         assert_eq!("服务器上线通知", Code::Online.to_string());
+    }
+
+    #[test]
+    fn test_target() {
+        assert_eq!("myself(J)", Target::Myself(String::from("J")).to_string());
+        assert_eq!("another(K)", Target::Another(String::from("K")).to_string());
     }
 
     // mock notices object for testing
