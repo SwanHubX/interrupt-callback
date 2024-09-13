@@ -1,6 +1,7 @@
 mod config;
 mod alert;
 mod spot;
+mod keepalive;
 
 use log::{LevelFilter};
 use env_logger::Builder;
