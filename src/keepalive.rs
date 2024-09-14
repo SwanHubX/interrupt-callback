@@ -1,6 +1,6 @@
 use std::error::Error;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write, BufReader, BufRead, Error as IOError};
+use std::net::{Incoming, TcpListener, TcpStream};
 use std::sync::Mutex;
 use log::{debug, error};
 use reqwest::Url;
@@ -16,14 +16,46 @@ struct Packet {
     msg: String,
 }
 
+#[derive(Debug)]
 pub struct TcpServer {
     listener: TcpListener,
-    key: String,
+    key: String, // used to authorize
+    name: String,
 }
 
 impl TcpServer {
-    pub fn handle(&self) {
-        todo!()
+    pub fn new(port: &str, name: &str, key: &str) -> Result<TcpServer, IOError> {
+        let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
+        Ok(TcpServer {
+            listener,
+            key: key.to_string(),
+            name: name.to_string(),
+        })
+    }
+
+    pub fn incoming(&self) -> Incoming<'_> {
+        self.listener.incoming()
+    }
+
+    pub fn handle(&self, mut stream: TcpStream) -> Result<Packet, Box<dyn Error>> {
+        let buf_reader = BufReader::new(&mut stream);
+        let mut buffer = String::new();
+        // limit 1024 bytes
+        let size = buf_reader.take(1024).read_line(&mut buffer)?;
+        debug!("received size: {size}");
+        let p: Packet = serde_json::from_str(&buffer)?;
+        if p.key != self.key {
+            stream.write_all("unauthorized".as_bytes())?;
+            return Err(Box::new("403 Unauthorized"));
+        }
+        // pong
+        let packet = Packet {
+            key: self.key.clone(),
+            name: self.name.clone(),
+            msg: "see you next period".to_string(),
+        };
+        stream.write_all(serde_json::to_string(&packet)?.as_bytes())?;
+        Ok(p)
     }
 }
 
@@ -79,7 +111,9 @@ impl TcpClient {
         let mut buf = String::new();
         stream.read_to_string(&mut buf)?;
         // deserialize string -> json
-        let res_packet: Packet = serde_json::from_str(&buf)?;
+        let res_packet: Packet = serde_json::from_str(&buf).map_err(|err| {
+            format!("{}: {}", err, buf)
+        })?;
 
         Ok(res_packet)
     }
@@ -123,7 +157,7 @@ mod test {
         let client = TcpClient::new("ic://default@127.0.0.1:9011", "Q").unwrap();
         assert!(client.ping("are you ok?").is_err())
     }
-    
+
     fn mock_server(msg: String) -> String {
         // firstly, mock a tcp server
         // :0 means that a random port will be allocated
