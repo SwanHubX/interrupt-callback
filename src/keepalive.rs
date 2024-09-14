@@ -1,14 +1,13 @@
 use std::error::Error;
 use std::io::{Read, Write, BufReader, BufRead, Error as IOError};
 use std::net::{Incoming, TcpListener, TcpStream};
-use std::sync::Mutex;
 use log::{debug, error};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Packet {
+pub struct Packet {
     #[serde(default)]
     key: String, // password for authorization
     name: String, // server identifier from sender
@@ -24,7 +23,7 @@ pub struct TcpServer {
 }
 
 impl TcpServer {
-    pub fn new(port: &str, name: &str, key: &str) -> Result<TcpServer, IOError> {
+    pub fn new(port: u16, name: &str, key: &str) -> Result<TcpServer, IOError> {
         let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
         Ok(TcpServer {
             listener,
@@ -41,12 +40,22 @@ impl TcpServer {
         let buf_reader = BufReader::new(&mut stream);
         let mut buffer = String::new();
         // limit 1024 bytes
-        let size = buf_reader.take(1024).read_line(&mut buffer)?;
+        let size = buf_reader.take(1024).read_line(&mut buffer).map_err(|err| {
+            format!("{}: {}", err, buffer)
+        })?;
         debug!("received size: {size}");
-        let p: Packet = serde_json::from_str(&buffer)?;
+        let p: Packet = serde_json::from_str(&buffer).map_err(|err| {
+            stream.write_all("invalid message".as_bytes()).unwrap_or_else(|err| {
+                error!("sending failed: {err}");
+            });
+            format!("crawler - {}: {}", err, buffer)
+        })?;
+        // authorized
         if p.key != self.key {
-            stream.write_all("unauthorized".as_bytes())?;
-            return Err(Box::new("403 Unauthorized"));
+            stream.write_all("unauthorized".as_bytes()).unwrap_or_else(|err| {
+                error!("sending failed: {err}");
+            });
+            return Err(Box::from("unauthorized"));
         }
         // pong
         let packet = Packet {
@@ -60,7 +69,7 @@ impl TcpServer {
 }
 
 #[derive(Debug, PartialEq)]
-struct TcpClient {
+pub struct TcpClient {
     addr: String, // example: 127.0.0.1:9080
     key: String, // optional, default is empty
     name: String, // not modifiable
@@ -198,5 +207,78 @@ mod test {
         let addr = mock_server("you are fake".to_string());
         let client = TcpClient::new(&format!("ic://default:coin@{}", addr), "Q").unwrap();
         assert!(client.ping("I'm ok").is_err())
+    }
+
+    #[test]
+    #[should_panic(expected = "Address already in use")]
+    fn test_tcp_server_new() {
+        let listener = TcpListener::bind("0.0.0.0:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        TcpServer::new(port, "Q", "coin").unwrap();
+    }
+
+    // client send wrong message format
+    #[test]
+    #[should_panic(expected = "crawler - ")]
+    fn server_error_msg() {
+        let server = TcpServer::new(0, "J", "101").unwrap();
+        let addr = server.listener.local_addr().unwrap();
+        // client
+        let h = thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            // '\n' is required
+            stream.write_all("I'm crawler man\n".as_bytes()).unwrap();
+            // received response
+            let mut buf = String::new();
+            stream.read_to_string(&mut buf).unwrap();
+            assert_eq!(buf, "invalid message");
+        });
+        let stream = server.incoming().next().unwrap();
+        server.handle(stream.unwrap()).unwrap();
+        // await child thread
+        h.join().unwrap()
+    }
+
+    #[test]
+    fn unauthorized() {
+        let server = TcpServer::new(0, "J", "101").unwrap();
+        let addr = server.listener.local_addr().unwrap();
+        // client
+        let h = thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            let packet = json!({
+                "key": "",
+                "name": "in",
+                "msg": "hi, bro"
+            });
+            // '\n' is required
+            stream.write_all(format!("{}\n", packet.to_string()).as_bytes()).unwrap();
+            // received response
+            let mut buf = String::new();
+            stream.read_to_string(&mut buf).unwrap();
+            assert_eq!(buf, "unauthorized");
+        });
+        let stream = server.incoming().next().unwrap();
+        let err = server.handle(stream.unwrap()).expect_err("");
+        assert_eq!("unauthorized", err.to_string());
+        // await child thread
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn everything_is_ok() {
+        let server = TcpServer::new(0, "Y", "").unwrap();
+        let addr = server.listener.local_addr().unwrap();
+
+        let client = TcpClient::new(&format!("ic://default@{}", addr), "Q").unwrap();
+        let h = thread::spawn(move || {
+            let p = client.ping("I'm active").unwrap();
+            assert_eq!("Y", p.name);
+        });
+        let stream = server.incoming().next().unwrap();
+        let p = server.handle(stream.unwrap()).unwrap();
+        assert_eq!("Q", p.name);
+
+        h.join().unwrap();
     }
 }
