@@ -78,14 +78,13 @@ impl fmt::Display for Target {
     }
 }
 
-
 pub trait Notice: Send + Sync {
     fn send(&self, msg: &Msg) -> Result<(), Box<dyn Error>>;
 }
 
 type AlertMap = HashMap<String, Box<dyn Notice>>;
 
-#[derive(Debug)]
+
 pub struct Alert {
     integrations: AlertMap,
 }
