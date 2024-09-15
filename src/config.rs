@@ -91,14 +91,14 @@ pub struct Server {
     #[serde(default)]
     pub key: String,
     #[serde(default = "default_num")]
-    pub num: u16,
+    pub num: u8,
 }
 
 fn default_period() -> u16 {
     30
 }
 
-fn default_num() -> u16 {
+fn default_num() -> u8 {
     4
 }
 

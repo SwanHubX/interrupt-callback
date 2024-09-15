@@ -1,25 +1,34 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::{Read, Write, BufReader, BufRead, Error as IOError};
 use std::net::{Incoming, TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 use log::{debug, error};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-
+use crate::alert::Alert;
+use crate::config;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Packet {
     #[serde(default)]
     key: String, // password for authorization
-    name: String, // server identifier from sender
+    pub name: String, // server identifier from sender
     #[serde(default)]
-    msg: String,
+    pub msg: String,
 }
+
+type WhiteList = HashMap<String, u8>;
 
 #[derive(Debug)]
 pub struct TcpServer {
     listener: TcpListener,
     key: String, // used to authorize
     name: String,
+    period: u16,
+    conf: config::Server,
+    alert: Arc<Alert>,
+    mu: Arc<Mutex<WhiteList>>,
 }
 
 impl TcpServer {
@@ -36,6 +45,7 @@ impl TcpServer {
         self.listener.incoming()
     }
 
+    // handle connection with a child thread
     pub fn handle(&self, mut stream: TcpStream) -> Result<Packet, Box<dyn Error>> {
         let buf_reader = BufReader::new(&mut stream);
         let mut buffer = String::new();
@@ -127,6 +137,7 @@ impl TcpClient {
         Ok(res_packet)
     }
 }
+
 
 #[cfg(test)]
 mod test {
