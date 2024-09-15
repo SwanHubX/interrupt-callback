@@ -218,6 +218,7 @@ mod test {
     use std::thread;
     use std::io::{BufRead, BufReader};
     use serde_json::json;
+    use crate::alert::AlertMap;
     use super::*;
 
     #[test]
@@ -377,5 +378,33 @@ mod test {
         assert_eq!("Q", p.name);
 
         h.join().unwrap();
+    }
+
+    #[test]
+    fn test_patrol() {
+        let list = WhiteList::from([
+            ("a".to_string(), 2),
+            ("b".to_string(), 1),
+            ("c".to_string(), 0),
+        ]);
+        let mu = Arc::new(Mutex::new(list));
+        let alert = Alert::new(AlertMap::new());
+        // mu1 will be moved to a thread
+        let mu1 = Arc::clone(&mu);
+        thread::spawn(move || {
+            patrol(mu1, Arc::new(alert));
+        });
+        // delay 10ms to allow the child thread gets lock firstly
+        thread::sleep(Duration::from_millis(10));
+        let l = mu.lock().unwrap();
+        for (k, v) in l.iter() {
+            let target = match k.as_str() {
+                "a" => 1,
+                "b" => 0,
+                "c" => 0,
+                _ => 0
+            };
+            assert_eq!(target, *v);
+        }
     }
 }
