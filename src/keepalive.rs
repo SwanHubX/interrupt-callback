@@ -1,7 +1,7 @@
 use crate::alert::Target::Another;
 use crate::alert::{Alert, Code, Msg};
 use crate::config;
-use log::{debug, error};
+use log::{debug, error, info};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -100,7 +100,8 @@ impl TcpServer {
         thread::spawn(move || {
             loop {
                 patrol(Arc::clone(&mu), Arc::clone(&alert));
-                thread::sleep(Duration::from_secs(period as u64))
+                info!("server - the watchdog ends a patrol");
+                thread::sleep(Duration::from_secs(period as u64));
             };
         });
     }
