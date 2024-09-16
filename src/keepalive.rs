@@ -49,6 +49,7 @@ impl TcpServer {
     }
 
     pub fn run(&self, alert: Arc<Alert>) {
+        self.watchdog(Arc::clone(&alert));
         for stream in self.listener.incoming() {
             match stream {
                 Ok(s) => self.handle(s, Arc::clone(&alert)),
@@ -70,21 +71,25 @@ impl TcpServer {
         let num = self.conf.num;
 
         thread::spawn(move || {
-            let p = handle(steam, &name, &key).expect("unexpected connection");
-            let mut code: Option<Code> = None;
-            {
-                let mut list = mu.lock().unwrap();
-                if let Some(v) = list.get(&p.name) {
-                    if *v == 0 {
-                        code = Some(Code::Online);
+            match handle(steam, &name, &key) {
+                Ok(p) => {
+                    let mut code: Option<Code> = None;
+                    {
+                        let mut list = mu.lock().unwrap();
+                        if let Some(v) = list.get(&p.name) {
+                            if *v == 0 {
+                                code = Some(Code::Online);
+                            }
+                        };
+                        // start over
+                        list.insert(p.name.to_string(), num);
+                    };
+                    if let Some(c) = code {
+                        alert.send(&Msg::new(c, Another(p.name)));
                     }
-                };
-                // start over
-                list.insert(p.name.to_string(), num);
+                }
+                Err(e) => error!("unexpected connection: {}", e)
             };
-            if let Some(c) = code {
-                alert.send(&Msg::new(c, Another(p.name)));
-            }
         });
     }
 
