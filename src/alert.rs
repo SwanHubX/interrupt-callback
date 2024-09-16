@@ -36,11 +36,11 @@ fn now() -> String {
 }
 
 // system's host name
-fn hostname() -> String {
+pub fn hostname() -> String {
     System::host_name().unwrap_or_else(|| "".to_string())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Code {
     // the spot instance of AliCloud will terminate.
     AliCloudInterrupt,

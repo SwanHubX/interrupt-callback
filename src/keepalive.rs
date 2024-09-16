@@ -1,16 +1,16 @@
 use crate::alert::Target::Another;
 use crate::alert::{Alert, Code, Msg};
 use crate::config;
-use log::{debug, error};
+use log::{debug, error, info};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader, Error as IOError, Read, Write};
-use std::net::{Incoming, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Packet {
@@ -49,6 +49,7 @@ impl TcpServer {
     }
 
     pub fn run(&self, alert: Arc<Alert>) {
+        self.watchdog(Arc::clone(&alert));
         for stream in self.listener.incoming() {
             match stream {
                 Ok(s) => self.handle(s, Arc::clone(&alert)),
@@ -70,21 +71,25 @@ impl TcpServer {
         let num = self.conf.num;
 
         thread::spawn(move || {
-            let p = handle(steam, &name, &key).expect("unexpected connection");
-            let mut code: Option<Code> = None;
-            {
-                let mut list = mu.lock().unwrap();
-                if let Some(v) = list.get(&p.name) {
-                    if *v == 0 {
-                        code = Some(Code::Online);
+            match handle(steam, &name, &key) {
+                Ok(p) => {
+                    let mut code: Option<Code> = None;
+                    {
+                        let mut list = mu.lock().unwrap();
+                        if let Some(v) = list.get(&p.name) {
+                            if *v == 0 {
+                                code = Some(Code::Online);
+                            }
+                        };
+                        // start over
+                        list.insert(p.name.to_string(), num);
+                    };
+                    if let Some(c) = code {
+                        alert.send(&Msg::new(c, Another(p.name)));
                     }
-                };
-                // start over
-                list.insert(p.name.to_string(), num);
+                }
+                Err(e) => error!("unexpected connection: {}", e)
             };
-            if let Some(c) = code {
-                alert.send(&Msg::new(c, Another(p.name)));
-            }
         });
     }
 
@@ -95,7 +100,8 @@ impl TcpServer {
         thread::spawn(move || {
             loop {
                 patrol(Arc::clone(&mu), Arc::clone(&alert));
-                thread::sleep(Duration::from_secs(period as u64))
+                info!("server - the watchdog ends a patrol");
+                thread::sleep(Duration::from_secs(period as u64));
             };
         });
     }
@@ -439,7 +445,7 @@ mod test {
         let addr = server.listener.local_addr().unwrap();
 
         let client = TcpClient::new(&format!("ic://default:-@{}", addr), "Q").unwrap();
-        let h = thread::spawn(move || {
+        thread::spawn(move || {
             let p = client.ping("I'm active").unwrap();
             assert_eq!("Y", p.name);
         });
@@ -466,7 +472,7 @@ mod test {
             list.insert("Q".to_string(), 0);
         }
         let client = TcpClient::new(&format!("ic://default:-@{}", addr), "Q").unwrap();
-        let h = thread::spawn(move || {
+        thread::spawn(move || {
             let p = client.ping("I'm active").unwrap();
             assert_eq!("Y", p.name);
         });

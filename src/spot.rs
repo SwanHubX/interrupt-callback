@@ -2,7 +2,7 @@ use log::error;
 use reqwest::{blocking::Client, Error, StatusCode};
 use std::time::Duration;
 
-struct Spot {
+pub struct Spot {
     client: Client,
 }
 

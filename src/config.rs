@@ -81,9 +81,8 @@ impl Default for KeepAlive {
 
 #[derive(Deserialize, Debug, PartialEq)]
 pub struct Client {
-    pub url: String,
-    #[serde(default)]
-    pub key: String,
+    // format: ic://default:{key}@{host}:{port}
+    pub uri: String,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
