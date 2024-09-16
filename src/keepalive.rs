@@ -1,72 +1,159 @@
-use std::error::Error;
-use std::io::{Read, Write, BufReader, BufRead, Error as IOError};
-use std::net::{Incoming, TcpListener, TcpStream};
+use crate::alert::Target::Another;
+use crate::alert::{Alert, Code, Msg};
+use crate::config;
 use log::{debug, error};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-
+use std::collections::HashMap;
+use std::error::Error;
+use std::io::{BufRead, BufReader, Error as IOError, Read, Write};
+use std::net::{Incoming, TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::thread;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Packet {
     #[serde(default)]
     key: String, // password for authorization
-    name: String, // server identifier from sender
+    pub name: String, // server identifier from sender
     #[serde(default)]
-    msg: String,
+    pub msg: String,
 }
+
+type WhiteList = HashMap<String, u8>;
 
 #[derive(Debug)]
 pub struct TcpServer {
     listener: TcpListener,
-    key: String, // used to authorize
-    name: String,
+    name: String, // the instance name
+    period: u16,
+    conf: config::Server,
+    mu: Arc<Mutex<WhiteList>>,
 }
 
 impl TcpServer {
-    pub fn new(port: u16, name: &str, key: &str) -> Result<TcpServer, IOError> {
+    pub fn new(port: u16, name: &str, period: u16, conf: config::Server) -> Result<TcpServer, IOError> {
         let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
+        // create a list of clients which is used to record status
+        // it must be wrapped in a mutex
+        let list: WhiteList = HashMap::new();
+        let mu = Arc::new(Mutex::new(list));
         Ok(TcpServer {
             listener,
-            key: key.to_string(),
             name: name.to_string(),
+            period,
+            conf,
+            mu,
         })
     }
 
-    pub fn incoming(&self) -> Incoming<'_> {
-        self.listener.incoming()
+    pub fn run(&self, alert: Arc<Alert>) {
+        for stream in self.listener.incoming() {
+            match stream {
+                Ok(s) => self.handle(s, Arc::clone(&alert)),
+                Err(e) => {
+                    error!("a wrong connection occurs: {}", e);
+                }
+            }
+        }
     }
 
-    pub fn handle(&self, mut stream: TcpStream) -> Result<Packet, Box<dyn Error>> {
-        let buf_reader = BufReader::new(&mut stream);
-        let mut buffer = String::new();
-        // limit 1024 bytes
-        let size = buf_reader.take(1024).read_line(&mut buffer).map_err(|err| {
-            format!("{}: {}", err, buffer)
-        })?;
-        debug!("received size: {size}");
-        let p: Packet = serde_json::from_str(&buffer).map_err(|err| {
-            stream.write_all("invalid message".as_bytes()).unwrap_or_else(|err| {
-                error!("sending failed: {err}");
-            });
-            format!("crawler - {}: {}", err, buffer)
-        })?;
-        // authorized
-        if p.key != self.key {
-            stream.write_all("unauthorized".as_bytes()).unwrap_or_else(|err| {
-                error!("sending failed: {err}");
-            });
-            return Err(Box::from("unauthorized"));
-        }
-        // pong
-        let packet = Packet {
-            key: self.key.clone(),
-            name: self.name.clone(),
-            msg: "see you next period".to_string(),
-        };
-        stream.write_all(serde_json::to_string(&packet)?.as_bytes())?;
-        Ok(p)
+    // handle method id different from handle function
+    // that is a complete processing logic for stream
+    // - alert must be wrapped with Arc<>
+    fn handle(&self, steam: TcpStream, alert: Arc<Alert>) {
+        let mu = Arc::clone(&self.mu);
+        // they will be moved to a single thread
+        let name = self.name.clone();
+        let key = self.conf.key.clone();
+        let num = self.conf.num;
+
+        thread::spawn(move || {
+            let p = handle(steam, &name, &key).expect("unexpected connection");
+            let mut code: Option<Code> = None;
+            {
+                let mut list = mu.lock().unwrap();
+                if let Some(v) = list.get(&p.name) {
+                    if *v == 0 {
+                        code = Some(Code::Online);
+                    }
+                };
+                // start over
+                list.insert(p.name.to_string(), num);
+            };
+            if let Some(c) = code {
+                alert.send(&Msg::new(c, Another(p.name)));
+            }
+        });
+    }
+
+    // patrol at regular period like a watch dog
+    fn watchdog(&self, alert: Arc<Alert>) {
+        let mu = self.mu.clone();
+        let period = self.period;
+        thread::spawn(move || {
+            loop {
+                patrol(Arc::clone(&mu), Arc::clone(&alert));
+                thread::sleep(Duration::from_secs(period as u64))
+            };
+        });
     }
 }
+
+// handle connection in a child thread
+fn handle(mut stream: TcpStream, name: &str, key: &str) -> Result<Packet, Box<dyn Error>> {
+    let buf_reader = BufReader::new(&mut stream);
+    let mut buffer = String::new();
+    // limit 1024 bytes
+    let size = buf_reader.take(1024).read_line(&mut buffer).map_err(|err| {
+        format!("{}: {}", err, buffer)
+    })?;
+    debug!("received size: {size}");
+    let p: Packet = serde_json::from_str(&buffer).map_err(|err| {
+        stream.write_all("invalid message".as_bytes()).unwrap_or_else(|err| {
+            error!("sending failed: {err}");
+        });
+        format!("crawler - {}: {}", err, buffer)
+    })?;
+    // authorized
+    if p.key != key {
+        stream.write_all("unauthorized".as_bytes()).unwrap_or_else(|err| {
+            error!("sending failed: {err}");
+        });
+        return Err(Box::from("unauthorized"));
+    }
+    // pong
+    let packet = Packet {
+        key: key.to_string(),
+        name: name.to_string(),
+        msg: "see you next period".to_string(),
+    };
+    stream.write_all(serde_json::to_string(&packet)?.as_bytes())?;
+    Ok(p)
+}
+
+
+// this function implements the internal logic of the watchdog
+// all the parameters must be wrapped with Arc<> because in a thread
+fn patrol(mu: Arc<Mutex<WhiteList>>, alert: Arc<Alert>) {
+    let mut list = mu.lock().unwrap();
+    for (k, v) in list.iter_mut() {
+        if *v == 0 {
+            continue;
+        }
+        *v = v.saturating_sub(1); // >=0
+        if *v == 0 {
+            // It is required that clone an alert in loop
+            let alert = Arc::clone(&alert);
+            let name = k.to_string();
+            thread::spawn(move || {
+                alert.send(&Msg::new(Code::Offline, Another(name)));
+            });
+        };
+    };
+}
+
 
 #[derive(Debug, PartialEq)]
 pub struct TcpClient {
@@ -128,12 +215,14 @@ impl TcpClient {
     }
 }
 
+
 #[cfg(test)]
 mod test {
-    use std::thread;
-    use std::io::{BufRead, BufReader};
-    use serde_json::json;
     use super::*;
+    use crate::alert::AlertMap;
+    use serde_json::json;
+    use std::io::{BufRead, BufReader};
+    use std::thread;
 
     #[test]
     #[should_panic(expected = "invalid uri")]
@@ -214,14 +303,20 @@ mod test {
     fn test_tcp_server_new() {
         let listener = TcpListener::bind("0.0.0.0:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        TcpServer::new(port, "Q", "coin").unwrap();
+        TcpServer::new(port, "Q", 30, config::Server {
+            key: "coin".to_string(),
+            num: 4,
+        }).unwrap();
     }
 
     // client send wrong message format
     #[test]
     #[should_panic(expected = "crawler - ")]
     fn server_error_msg() {
-        let server = TcpServer::new(0, "J", "101").unwrap();
+        let server = TcpServer::new(0, "J", 30, config::Server {
+            key: "101".to_string(),
+            num: 4,
+        }).unwrap();
         let addr = server.listener.local_addr().unwrap();
         // client
         let h = thread::spawn(move || {
@@ -233,15 +328,18 @@ mod test {
             stream.read_to_string(&mut buf).unwrap();
             assert_eq!(buf, "invalid message");
         });
-        let stream = server.incoming().next().unwrap();
-        server.handle(stream.unwrap()).unwrap();
+        let stream = server.listener.incoming().next().unwrap();
+        handle(stream.unwrap(), "J", "101").unwrap();
         // await child thread
         h.join().unwrap()
     }
 
     #[test]
     fn unauthorized() {
-        let server = TcpServer::new(0, "J", "101").unwrap();
+        let server = TcpServer::new(0, "J", 30, config::Server {
+            key: "101".to_string(),
+            num: 4,
+        }).unwrap();
         let addr = server.listener.local_addr().unwrap();
         // client
         let h = thread::spawn(move || {
@@ -258,8 +356,8 @@ mod test {
             stream.read_to_string(&mut buf).unwrap();
             assert_eq!(buf, "unauthorized");
         });
-        let stream = server.incoming().next().unwrap();
-        let err = server.handle(stream.unwrap()).expect_err("");
+        let stream = server.listener.incoming().next().unwrap();
+        let err = handle(stream.unwrap(), "J", "101").expect_err("");
         assert_eq!("unauthorized", err.to_string());
         // await child thread
         h.join().unwrap();
@@ -267,7 +365,10 @@ mod test {
 
     #[test]
     fn everything_is_ok() {
-        let server = TcpServer::new(0, "Y", "").unwrap();
+        let server = TcpServer::new(0, "Y", 300, config::Server {
+            key: "".to_string(),
+            num: 1,
+        }).unwrap();
         let addr = server.listener.local_addr().unwrap();
 
         let client = TcpClient::new(&format!("ic://default@{}", addr), "Q").unwrap();
@@ -275,10 +376,107 @@ mod test {
             let p = client.ping("I'm active").unwrap();
             assert_eq!("Y", p.name);
         });
-        let stream = server.incoming().next().unwrap();
-        let p = server.handle(stream.unwrap()).unwrap();
+        let stream = server.listener.incoming().next().unwrap();
+        let p = handle(stream.unwrap(), "Y", "").unwrap();
         assert_eq!("Q", p.name);
 
         h.join().unwrap();
+    }
+
+    #[test]
+    fn test_patrol() {
+        let list = WhiteList::from([
+            ("a".to_string(), 2),
+            ("b".to_string(), 1),
+            ("c".to_string(), 0),
+        ]);
+        let mu = Arc::new(Mutex::new(list));
+        let alert = Alert::new(AlertMap::new());
+        // mu1 will be moved to a thread
+        let mu1 = Arc::clone(&mu);
+        thread::spawn(move || {
+            patrol(mu1, Arc::new(alert));
+        });
+        // delay 10ms to allow the child thread gets lock firstly
+        thread::sleep(Duration::from_millis(10));
+        let l = mu.lock().unwrap();
+        for (k, v) in l.iter() {
+            let target = match k.as_str() {
+                "a" => 1,
+                "b" => 0,
+                "c" => 0,
+                _ => 0
+            };
+            assert_eq!(target, *v);
+        }
+    }
+
+    // the panic of a child thread has no effect on parent thread
+    #[test]
+    fn handle_invalid_packet() {
+        let server = TcpServer::new(0, "J", 30, config::Server {
+            key: "-".to_string(),
+            num: 4,
+        }).unwrap();
+        let addr = server.listener.local_addr().unwrap();
+        // client
+        thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream.write_all("I'm crawler man\n".as_bytes()).unwrap();
+        });
+        let stream = server.listener.incoming().next().unwrap();
+        let alert = Alert::new(AlertMap::new());
+        server.handle(stream.unwrap(), Arc::new(alert));
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    #[test]
+    fn handle_new_client() {
+        let server = TcpServer::new(0, "Y", 30, config::Server {
+            key: "-".to_string(),
+            num: 4,
+        }).unwrap();
+        let addr = server.listener.local_addr().unwrap();
+
+        let client = TcpClient::new(&format!("ic://default:-@{}", addr), "Q").unwrap();
+        let h = thread::spawn(move || {
+            let p = client.ping("I'm active").unwrap();
+            assert_eq!("Y", p.name);
+        });
+        let stream = server.listener.incoming().next().unwrap();
+        let alert = Alert::new(AlertMap::new());
+        server.handle(stream.unwrap(), Arc::new(alert));
+        // delay 100ms
+        thread::sleep(Duration::from_millis(100));
+        // get whitelist
+        let list = server.mu.lock().unwrap();
+        assert_eq!(list.get("Q").unwrap(), &4);
+    }
+
+    #[test]
+    fn test_client_online() {
+        let server = TcpServer::new(0, "Y", 30, config::Server {
+            key: "-".to_string(),
+            num: 4,
+        }).unwrap();
+        let addr = server.listener.local_addr().unwrap();
+        // avoid deadlock with a scope
+        {
+            let mut list = server.mu.lock().unwrap();
+            list.insert("Q".to_string(), 0);
+        }
+        let client = TcpClient::new(&format!("ic://default:-@{}", addr), "Q").unwrap();
+        let h = thread::spawn(move || {
+            let p = client.ping("I'm active").unwrap();
+            assert_eq!("Y", p.name);
+        });
+        let stream = server.listener.incoming().next().unwrap();
+        let alert = Alert::new(AlertMap::new());
+        server.handle(stream.unwrap(), Arc::new(alert));
+        // delay 100ms
+        thread::sleep(Duration::from_millis(100));
+        // get whitelist
+        let list = server.mu.lock().unwrap();
+        assert_eq!(list.get("Q").unwrap(), &4);
     }
 }

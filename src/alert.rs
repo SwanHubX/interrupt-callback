@@ -78,26 +78,26 @@ impl fmt::Display for Target {
     }
 }
 
-
-pub trait Notice {
+pub trait Notice: Send + Sync {
     fn send(&self, msg: &Msg) -> Result<(), Box<dyn Error>>;
 }
 
-type AlertMap = HashMap<String, Box<dyn Notice>>;
+pub type AlertMap = HashMap<String, Box<dyn Notice>>;
+
 
 pub struct Alert {
     integrations: AlertMap,
 }
 
 impl Alert {
-    fn new(integrations: AlertMap) -> Alert {
+    pub fn new(integrations: AlertMap) -> Alert {
         Alert {
             integrations
         }
     }
 
     // this method will return the result of sending with HashMap
-    fn send(&self, msg: &Msg) -> HashMap<String, bool> {
+    pub fn send(&self, msg: &Msg) -> HashMap<String, bool> {
         let mut result = HashMap::new();
         for (name, notice) in self.integrations.iter() {
             info!("send an alert to {name}");
