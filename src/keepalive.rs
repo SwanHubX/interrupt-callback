@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader, Error as IOError, Read, Write};
-use std::net::{Incoming, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Packet {
@@ -439,7 +439,7 @@ mod test {
         let addr = server.listener.local_addr().unwrap();
 
         let client = TcpClient::new(&format!("ic://default:-@{}", addr), "Q").unwrap();
-        let h = thread::spawn(move || {
+        thread::spawn(move || {
             let p = client.ping("I'm active").unwrap();
             assert_eq!("Y", p.name);
         });
@@ -466,7 +466,7 @@ mod test {
             list.insert("Q".to_string(), 0);
         }
         let client = TcpClient::new(&format!("ic://default:-@{}", addr), "Q").unwrap();
-        let h = thread::spawn(move || {
+        thread::spawn(move || {
             let p = client.ping("I'm active").unwrap();
             assert_eq!("Y", p.name);
         });
