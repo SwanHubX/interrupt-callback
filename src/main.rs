@@ -27,8 +27,8 @@ use std::{env, thread, time::Duration};
  */
 fn main() {
     Builder::new().filter_level(LevelFilter::Info).init();
-    // 1. load config. note: default is empty with nothing
-    let conf_path = env::var("CONFIG_PATH").unwrap_or("".to_string());
+    // 1. load config. note: default path is /etc/ic/config.toml
+    let conf_path = env::var("CONFIG_PATH").unwrap_or("/etc/ic/config.toml".to_string());
     let conf = config::load_config(Path::new(&conf_path)).unwrap();
     debug!("the config: {:?}", conf);
     // 2. create an alert for notification
